@@ -1,0 +1,9 @@
+[theme]
+primaryColor="#1c8adb" # A modern blue
+backgroundColor="#f0f2f6" # Light grey background
+secondaryBackgroundColor="#ffffff" # White for containers/cards
+textColor="#31333F" # Dark grey text
+font="sans serif"
+
+[server]
+runOnSave = true 
