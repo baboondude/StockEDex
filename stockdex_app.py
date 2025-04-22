@@ -202,28 +202,29 @@ selected_tickers = st.sidebar.multiselect(
     default=top_50_tickers[0:1] if top_50_tickers else [] # Handle empty case
 )
 
+# --- Time Period Selection (Moved to Sidebar) ---
+time_periods = ["1m", "6m", "1y", "5y", "Max"]
+selected_period = st.sidebar.radio( # Changed from st.radio to st.sidebar.radio
+    "Select Chart Time Period:",
+    options=time_periods,
+    index=len(time_periods) - 1, # Default to 'Max'
+    horizontal=False, # Better layout in sidebar
+    key='time_period_selector'
+)
+
 # --- Main Area ---
 
 if not selected_tickers:
     st.warning("👈 Please select at least one stock from the sidebar.")
     st.stop()
 
-# --- Time Period Selection ---
-# Place this centrally, affecting both single and comparison views
-time_periods = ["1m", "6m", "1y", "5y", "Max"]
-selected_period = st.radio(
-    "Select Chart Time Period:",
-    options=time_periods,
-    index=len(time_periods) - 1, # Default to 'Max'
-    horizontal=True,
-    key='time_period_selector' # Add a key for potential state management
-)
-
-st.divider() # Separate selector from content
+# Remove the divider that was after the time selector in main area
+# st.divider() # Separate selector from content
 
 # --- Display Single Stock Details ---
 if len(selected_tickers) == 1:
     selected_ticker = selected_tickers[0]
+    # Keep header outside tabs
     st.header(f"📊 Details for {selected_ticker}")
 
     # Fetch data using spinner
@@ -231,9 +232,17 @@ if len(selected_tickers) == 1:
         info, history_max = get_stock_details(selected_ticker)
 
     if info:
-        # --- Company Overview Section ---
-        with st.container(border=True):
-            st.subheader(":briefcase: Company Overview")
+        # --- Define Tabs ---
+        tab_overview, tab_stats, tab_chart = st.tabs([
+            "📄 Overview",
+            "🔢 Key Stats",
+            "📈 Chart"
+        ])
+
+        # --- Overview Tab --- 
+        with tab_overview:
+            # --- Company Overview Section (Inside Tab) ---
+            # st.subheader(":briefcase: Company Overview") # Subheader might be redundant with tab title
             col1, col2 = st.columns(2)
             with col1:
                 st.metric(label="**Company Name**", value=info.get('longName', 'N/A'))
@@ -251,18 +260,19 @@ if len(selected_tickers) == 1:
                 st.metric(label="**Day High**", value=f"${info.get('dayHigh', 0):.2f}")
                 st.metric(label="**Day Low**", value=f"${info.get('dayLow', 0):.2f}")
 
-        st.divider()
+            st.divider() # Keep divider within the tab
 
-        # --- Business Summary Section ---
-        with st.container(border=True):
-             st.subheader(":page_facing_up: Business Summary")
-             st.write(info.get('longBusinessSummary', 'No summary available.'))
+            # --- Business Summary Section (Inside Overview Tab) ---
+            st.subheader(":page_facing_up: Business Summary") # Keep subheader here
+            st.write(info.get('longBusinessSummary', 'No summary available.'))
 
-        st.divider()
+        # Remove dividers between main sections, tabs handle separation
+        # st.divider()
 
-        # --- Key Statistics & Valuation Section ---
-        with st.container(border=True):
-            st.subheader(":calculator: Key Statistics & Valuation")
+        # --- Key Stats Tab ---
+        with tab_stats:
+            # --- Key Statistics & Valuation Section (Inside Tab) ---
+            # st.subheader(":calculator: Key Statistics & Valuation") # Redundant subheader
             stats_col1, stats_col2, stats_col3 = st.columns(3)
 
             # Helper function to format metrics
@@ -302,27 +312,28 @@ if len(selected_tickers) == 1:
                 st.metric("52 Week High", format_currency(info.get('fiftyTwoWeekHigh')))
                 st.metric("52 Week Low", format_currency(info.get('fiftyTwoWeekLow')))
 
-        st.divider()
+        # Remove divider
+        # st.divider()
 
-        # --- Chart Section ---
-        history_filtered = filter_history(history_max, selected_period)
-        if history_filtered is not None and not history_filtered.empty:
-             with st.container(border=True):
-                # Dynamic chart title
-                st.subheader(f":chart_with_upwards_trend: Stock Price History ({selected_period})")
+        # --- Chart Tab ---
+        with tab_chart:
+            history_filtered = filter_history(history_max, selected_period)
+            if history_filtered is not None and not history_filtered.empty:
+                # Keep subheader for context within the chart tab
+                st.subheader(f"Stock Price History ({selected_period})")
                 st.line_chart(history_filtered['Close'])
-        else:
-             # Check if max history exists but filtering resulted in empty
-             if history_max is not None and not history_max.empty:
-                  st.warning(f"No data available for the selected '{selected_period}' period.")
-             else:
-                  st.warning("Could not retrieve price history.")
+            else:
+                 if history_max is not None and not history_max.empty:
+                      st.warning(f"No data available for the selected '{selected_period}' period.")
+                 else:
+                      st.warning("Could not retrieve price history.")
 
     else:
         st.error(f"Could not retrieve data for {selected_ticker}.")
 
 # --- Display Stock Comparison ---
 elif len(selected_tickers) > 1:
+    # Comparison view remains unchanged, tabs not used here
     st.header(f"🆚 Comparison for: {', '.join(selected_tickers)}")
 
     comparison_data = {}
