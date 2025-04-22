@@ -347,7 +347,7 @@ if len(selected_tickers) == 1:
         with tab_fundamentals:
             st.subheader("Annual Financial Trends")
             # --- Revenue Chart ---
-            if not financials.empty and 'Total Revenue' in financials.index:
+            if isinstance(financials, pd.DataFrame) and not financials.empty and 'Total Revenue' in financials.index:
                 try:
                     # Transpose for plotting (years as columns -> index)
                     revenue_df = financials.loc[['Total Revenue']].transpose().sort_index()
@@ -366,7 +366,7 @@ if len(selected_tickers) == 1:
             st.divider()
 
             # --- Earnings Chart ---
-            if not earnings.empty and 'Earnings' in earnings.columns:
+            if isinstance(earnings, pd.DataFrame) and not earnings.empty and 'Earnings' in earnings.columns:
                 try:
                     earnings_df = earnings[['Earnings']].sort_index()
                     earnings_df = earnings_df.dropna()
@@ -378,8 +378,8 @@ if len(selected_tickers) == 1:
                 except Exception as e:
                     st.warning(f"Could not process earnings data: {e}")
             else:
-                 # Fallback: Try Net Income from financials if earnings is empty
-                 if not financials.empty and 'Net Income' in financials.index:
+                 # Fallback: Try Net Income from financials if earnings is empty or not DataFrame
+                 if isinstance(financials, pd.DataFrame) and not financials.empty and 'Net Income' in financials.index:
                      try:
                          net_income_df = financials.loc[['Net Income']].transpose().sort_index()
                          net_income_df = net_income_df.dropna()
