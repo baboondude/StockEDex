@@ -233,13 +233,11 @@ if len(selected_tickers) == 1:
         history_max = None
         news = []
         financials = pd.DataFrame()
-        earnings = pd.DataFrame()
         try:
             info = ticker_obj.info
             history_max = ticker_obj.history(period="max")
             news = ticker_obj.news
             financials = ticker_obj.financials # Annual financials
-            earnings = ticker_obj.earnings # Annual earnings
         except Exception as e:
             st.error(f"An error occurred while fetching data for {selected_ticker}: {e}")
             # Allow partial data display if some parts failed
@@ -349,10 +347,9 @@ if len(selected_tickers) == 1:
             # --- Revenue Chart ---
             if isinstance(financials, pd.DataFrame) and not financials.empty and 'Total Revenue' in financials.index:
                 try:
-                    # Transpose for plotting (years as columns -> index)
                     revenue_df = financials.loc[['Total Revenue']].transpose().sort_index()
                     revenue_df = revenue_df.dropna()
-                    revenue_df.index = revenue_df.index.strftime('%Y') # Format index to year
+                    revenue_df.index = revenue_df.index.strftime('%Y')
                     if not revenue_df.empty:
                         st.markdown("**Total Revenue**")
                         st.bar_chart(revenue_df)
@@ -365,34 +362,22 @@ if len(selected_tickers) == 1:
 
             st.divider()
 
-            # --- Earnings Chart ---
-            if isinstance(earnings, pd.DataFrame) and not earnings.empty and 'Earnings' in earnings.columns:
-                try:
-                    earnings_df = earnings[['Earnings']].sort_index()
-                    earnings_df = earnings_df.dropna()
-                    if not earnings_df.empty:
-                        st.markdown("**Net Earnings**")
-                        st.bar_chart(earnings_df)
-                    else:
-                        st.info("Earnings data not available or incomplete.")
-                except Exception as e:
-                    st.warning(f"Could not process earnings data: {e}")
+            # --- Earnings Chart (Using Net Income from Financials) ---
+            st.markdown("**Net Income**") # Use Net Income as the standard
+            if isinstance(financials, pd.DataFrame) and not financials.empty and 'Net Income' in financials.index:
+                 try:
+                     net_income_df = financials.loc[['Net Income']].transpose().sort_index()
+                     net_income_df = net_income_df.dropna()
+                     # Check if DataFrame is empty after dropping NaNs
+                     if not net_income_df.empty:
+                        net_income_df.index = net_income_df.index.strftime('%Y')
+                        st.bar_chart(net_income_df)
+                     else:
+                        st.info("Net Income data is available but contains only NaN values after processing.")
+                 except Exception as e:
+                    st.warning(f"Could not process Net Income data: {e}")
             else:
-                 # Fallback: Try Net Income from financials if earnings is empty or not DataFrame
-                 if isinstance(financials, pd.DataFrame) and not financials.empty and 'Net Income' in financials.index:
-                     try:
-                         net_income_df = financials.loc[['Net Income']].transpose().sort_index()
-                         net_income_df = net_income_df.dropna()
-                         net_income_df.index = net_income_df.index.strftime('%Y')
-                         if not net_income_df.empty:
-                             st.markdown("**Net Income**")
-                             st.bar_chart(net_income_df)
-                         else:
-                            st.info("Net Income data not available or incomplete.")
-                     except Exception as e:
-                        st.warning(f"Could not process Net Income data: {e}")
-                 else:
-                    st.info("Earnings/Net Income data not available.")
+                st.info("Net Income data not available.")
 
         # --- News Tab ---
         with tab_news:
