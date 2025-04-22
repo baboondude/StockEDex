@@ -224,55 +224,74 @@ if not selected_tickers:
 # --- Display Single Stock Details ---
 if len(selected_tickers) == 1:
     selected_ticker = selected_tickers[0]
-    # Keep header outside tabs
     st.header(f"📊 Details for {selected_ticker}")
 
     # Fetch data using spinner
     with st.spinner(f'Fetching details for {selected_ticker}...'):
-        info, history_max = get_stock_details(selected_ticker)
+        ticker_obj = yf.Ticker(selected_ticker)
+        info = None
+        history_max = None
+        news = []
+        financials = pd.DataFrame()
+        earnings = pd.DataFrame()
+        try:
+            info = ticker_obj.info
+            history_max = ticker_obj.history(period="max")
+            news = ticker_obj.news
+            financials = ticker_obj.financials # Annual financials
+            earnings = ticker_obj.earnings # Annual earnings
+        except Exception as e:
+            st.error(f"An error occurred while fetching data for {selected_ticker}: {e}")
+            # Allow partial data display if some parts failed
 
-    if info:
-        # --- Define Tabs ---
-        tab_overview, tab_stats, tab_chart = st.tabs([
+    if info: # Proceed if at least basic info was fetched
+        # --- Define Tabs (Add News & Fundamentals) ---
+        tab_overview, tab_stats, tab_chart, tab_fundamentals, tab_news = st.tabs([
             "📄 Overview",
             "🔢 Key Stats",
-            "📈 Chart"
+            "📈 Chart",
+            "💰 Fundamentals",
+            "📰 News"
         ])
 
         # --- Overview Tab --- 
         with tab_overview:
-            # --- Company Overview Section (Inside Tab) ---
-            # st.subheader(":briefcase: Company Overview") # Subheader might be redundant with tab title
-            col1, col2 = st.columns(2)
+            col1, col2 = st.columns([1, 3]) # Adjust column ratio for logo
             with col1:
-                st.metric(label="**Company Name**", value=info.get('longName', 'N/A'))
-                st.metric(label="**Sector**", value=info.get('sector', 'N/A'))
-                st.metric(label="**Industry**", value=info.get('industry', 'N/A'))
+                # --- Logo --- 
+                logo_url = info.get('logo_url')
+                if logo_url:
+                    st.image(logo_url, width=100) # Display logo
+                else:
+                    st.markdown("_(No Logo Available)_")
+
+                # Display website below logo if available
                 website = info.get('website', 'N/A')
                 if website and website != 'N/A':
-                     st.markdown(f"**Website:** [{website}]({website})")
+                    st.link_button("Visit Website", website)
                 else:
                     st.metric(label="**Website**", value='N/A')
 
             with col2:
-                st.metric(label="**Market Cap**", value=f"${info.get('marketCap', 0):,}")
-                st.metric(label="**Current Price**", value=f"${info.get('currentPrice', info.get('regularMarketPrice', 0)):.2f}")
-                st.metric(label="**Day High**", value=f"${info.get('dayHigh', 0):.2f}")
-                st.metric(label="**Day Low**", value=f"${info.get('dayLow', 0):.2f}")
+                # Use subcolumns for better alignment of metrics
+                subcol1, subcol2 = st.columns(2)
+                with subcol1:
+                    st.metric(label="**Company Name**", value=info.get('longName', 'N/A'))
+                    st.metric(label="**Sector**", value=info.get('sector', 'N/A'))
+                    st.metric(label="**Industry**", value=info.get('industry', 'N/A'))
+                with subcol2:
+                    st.metric(label="**Market Cap**", value=f"${info.get('marketCap', 0):,}")
+                    st.metric(label="**Current Price**", value=f"${info.get('currentPrice', info.get('regularMarketPrice', 0)):.2f}")
+                    st.metric(label="**Day High**", value=f"${info.get('dayHigh', 0):.2f}")
+                    st.metric(label="**Day Low**", value=f"${info.get('dayLow', 0):.2f}")
 
-            st.divider() # Keep divider within the tab
-
-            # --- Business Summary Section (Inside Overview Tab) ---
-            st.subheader(":page_facing_up: Business Summary") # Keep subheader here
+            st.divider()
+            st.subheader(":page_facing_up: Business Summary")
             st.write(info.get('longBusinessSummary', 'No summary available.'))
-
-        # Remove dividers between main sections, tabs handle separation
-        # st.divider()
 
         # --- Key Stats Tab ---
         with tab_stats:
             # --- Key Statistics & Valuation Section (Inside Tab) ---
-            # st.subheader(":calculator: Key Statistics & Valuation") # Redundant subheader
             stats_col1, stats_col2, stats_col3 = st.columns(3)
 
             # Helper function to format metrics
@@ -312,24 +331,94 @@ if len(selected_tickers) == 1:
                 st.metric("52 Week High", format_currency(info.get('fiftyTwoWeekHigh')))
                 st.metric("52 Week Low", format_currency(info.get('fiftyTwoWeekLow')))
 
-        # Remove divider
-        # st.divider()
-
         # --- Chart Tab ---
         with tab_chart:
-            history_filtered = filter_history(history_max, selected_period)
-            if history_filtered is not None and not history_filtered.empty:
-                # Keep subheader for context within the chart tab
-                st.subheader(f"Stock Price History ({selected_period})")
-                st.line_chart(history_filtered['Close'])
+            if history_max is not None: # Check if history was fetched
+                history_filtered = filter_history(history_max, selected_period)
+                if not history_filtered.empty:
+                    st.subheader(f"Stock Price History ({selected_period})")
+                    st.line_chart(history_filtered['Close'])
+                else:
+                    st.warning(f"No historical data available for the selected '{selected_period}' period.")
             else:
-                 if history_max is not None and not history_max.empty:
-                      st.warning(f"No data available for the selected '{selected_period}' period.")
-                 else:
-                      st.warning("Could not retrieve price history.")
+                st.warning("Could not retrieve price history.")
 
-    else:
-        st.error(f"Could not retrieve data for {selected_ticker}.")
+        # --- Fundamentals Tab ---
+        with tab_fundamentals:
+            st.subheader("Annual Financial Trends")
+            # --- Revenue Chart ---
+            if not financials.empty and 'Total Revenue' in financials.index:
+                try:
+                    # Transpose for plotting (years as columns -> index)
+                    revenue_df = financials.loc[['Total Revenue']].transpose().sort_index()
+                    revenue_df = revenue_df.dropna()
+                    revenue_df.index = revenue_df.index.strftime('%Y') # Format index to year
+                    if not revenue_df.empty:
+                        st.markdown("**Total Revenue**")
+                        st.bar_chart(revenue_df)
+                    else:
+                         st.info("Revenue data not available or incomplete.")
+                except Exception as e:
+                    st.warning(f"Could not process revenue data: {e}")
+            else:
+                st.info("Revenue data not available.")
+
+            st.divider()
+
+            # --- Earnings Chart ---
+            if not earnings.empty and 'Earnings' in earnings.columns:
+                try:
+                    earnings_df = earnings[['Earnings']].sort_index()
+                    earnings_df = earnings_df.dropna()
+                    if not earnings_df.empty:
+                        st.markdown("**Net Earnings**")
+                        st.bar_chart(earnings_df)
+                    else:
+                        st.info("Earnings data not available or incomplete.")
+                except Exception as e:
+                    st.warning(f"Could not process earnings data: {e}")
+            else:
+                 # Fallback: Try Net Income from financials if earnings is empty
+                 if not financials.empty and 'Net Income' in financials.index:
+                     try:
+                         net_income_df = financials.loc[['Net Income']].transpose().sort_index()
+                         net_income_df = net_income_df.dropna()
+                         net_income_df.index = net_income_df.index.strftime('%Y')
+                         if not net_income_df.empty:
+                             st.markdown("**Net Income**")
+                             st.bar_chart(net_income_df)
+                         else:
+                            st.info("Net Income data not available or incomplete.")
+                     except Exception as e:
+                        st.warning(f"Could not process Net Income data: {e}")
+                 else:
+                    st.info("Earnings/Net Income data not available.")
+
+        # --- News Tab ---
+        with tab_news:
+            st.subheader("Recent News")
+            if news: # Check if news list is not empty
+                for item in news:
+                    # Ensure essential keys exist
+                    title = item.get('title')
+                    publisher = item.get('publisher')
+                    link = item.get('link')
+                    # date = pd.to_datetime(item.get('providerPublishTime'), unit='s') # Convert Unix timestamp
+                    
+                    if title and link:
+                        st.markdown(f"**[{title}]({link})**")
+                        if publisher:
+                             st.caption(f"Source: {publisher}")
+                        # st.caption(f"Published: {date.strftime('%Y-%m-%d %H:%M')}")
+                        st.divider()
+                    else:
+                        # Optionally log or display minimal info if link/title missing
+                        pass 
+            else:
+                st.info("No recent news found for this ticker.")
+
+    elif selected_ticker: # If info failed but ticker was selected
+         st.error(f"Could not retrieve sufficient data for {selected_ticker} to display details.")
 
 # --- Display Stock Comparison ---
 elif len(selected_tickers) > 1:
