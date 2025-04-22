@@ -95,7 +95,7 @@ def get_stock_details(ticker_symbol):
     try:
         ticker = yf.Ticker(ticker_symbol)
         info = ticker.info
-        hist = ticker.history(period="1y") # Get 1 year history for charts/performance
+        hist = ticker.history(period="max") # Get max history for charts/performance
         return info, hist
     except Exception as e:
         st.error(f"Could not fetch details for {ticker_symbol}: {e}")
@@ -178,7 +178,7 @@ if info:
 
     # Display Chart
     if history is not None and not history.empty:
-        st.subheader("1-Year Stock Price History")
+        st.subheader("Stock Price History (Max)")
         st.line_chart(history['Close'])
     else:
         st.warning("Could not retrieve price history.")
