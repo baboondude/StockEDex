@@ -4,6 +4,7 @@ import pandas as pd
 import requests
 from bs4 import BeautifulSoup
 import pyarrow as pa # Import pyarrow
+from datetime import datetime, timedelta # Import datetime
 
 # Cache the data fetching functions to improve performance
 @st.cache_data(ttl=3600) # Cache data for 1 hour
@@ -40,7 +41,8 @@ def get_market_caps(tickers):
     batch_size = 100 # Process in batches to avoid overwhelming yfinance or getting rate-limited
     tickers_to_process = tickers[:] # Create a copy
 
-    progress_bar = st.progress(0, text="Fetching market data...")
+    # Use spinner instead of progress bar for this initial fetch
+    # progress_bar = st.progress(0, text="Fetching market data...")
     total_tickers = len(tickers_to_process)
     processed_count = 0
 
@@ -80,26 +82,28 @@ def get_market_caps(tickers):
                  if t not in market_caps:
                      market_caps[t] = None # Ensure failed tickers are marked
 
-        processed_count += len(batch)
-        progress = min(1.0, processed_count / total_tickers)
-        progress_bar.progress(progress, text=f"Fetching market data... ({processed_count}/{total_tickers})")
+        # Optional: Add progress update logic here if spinner isn't enough
+        # processed_count += len(batch)
+        # progress = min(1.0, processed_count / total_tickers)
+        # Consider updating a status text if needed
 
-
-    progress_bar.empty() # Remove progress bar when done
+    # progress_bar.empty() # Remove progress bar when done
     mc_df = pd.DataFrame.from_dict(market_caps, orient='index', columns=['MarketCap'])
     mc_df = mc_df.dropna().sort_values('MarketCap', ascending=False)
     return mc_df
 
 @st.cache_data(ttl=600) # Cache individual stock details for 10 minutes
 def get_stock_details(ticker_symbol):
-    """Fetches detailed information for a single stock ticker."""
+    """Fetches detailed information and MAX price history for a single stock ticker."""
     try:
         ticker = yf.Ticker(ticker_symbol)
+        # Fetch info first
         info = ticker.info
-        hist = ticker.history(period="max") # Get max history for charts/performance
-        # Resample if history is very long
-        hist = resample_history_if_needed(hist)
-        return info, hist
+        # Always fetch max history for filtering later
+        hist = ticker.history(period="max")
+        # Resample if history is very long (only affects 'Max' view display)
+        hist_resampled = resample_history_if_needed(hist.copy()) # Pass copy to avoid modifying original max hist
+        return info, hist # Return original max history
     except Exception as e:
         st.error(f"Could not fetch details for {ticker_symbol}: {e}")
         return None, None
@@ -112,85 +116,124 @@ def get_numeric(value):
         return float(value)
     return None
 
-# Function to highlight max/min values in a row (assuming higher is better for simplicity)
-# Handles non-numeric types and NaNs gracefully
+# Function to highlight max/min values in a row
 def highlight_max_min(s):
-    numeric_vals = pd.to_numeric(s, errors='coerce') # Convert to numeric, non-convertibles become NaN
-    if numeric_vals.isna().all() or len(numeric_vals.dropna()) < 2: # Don't highlight if all NaN or fewer than 2 numbers
+    numeric_vals = pd.to_numeric(s, errors='coerce')
+    if numeric_vals.isna().all() or len(numeric_vals.dropna()) < 2:
         return [''] * len(s)
 
     max_val = numeric_vals.max()
     min_val = numeric_vals.min()
 
-    # Create default styling (no background)
     styles = [''] * len(s)
-
     for i, val in enumerate(numeric_vals):
         if pd.notna(val):
+            # Use more subtle, theme-consistent colors
             if val == max_val:
-                styles[i] = 'background-color: lightgreen'
+                styles[i] = 'background-color: #d1ecf1' # Light Blueish
             elif val == min_val:
-                 styles[i] = 'background-color: lightcoral' # Use lightcoral instead of red for readability
+                 styles[i] = 'background-color: #f8d7da' # Light Pinkish
     return styles
 
 # Function to resample history if it spans too many years
 def resample_history_if_needed(history_df, threshold_years=10):
     if history_df.empty:
         return history_df
-    # Calculate the time span
     time_span = history_df.index.max() - history_df.index.min()
-    # Check if resampling is needed (e.g., > 10 years)
     if time_span > pd.Timedelta(days=threshold_years * 365.25):
-        # Resample to weekly frequency, taking the mean. Use 'W-MON' for Monday-based weeks.
-        # Keep only 'Close' price for simplicity in plotting
         history_df = history_df[['Close']].resample('W-MON').mean()
-        history_df = history_df.dropna() # Drop weeks with no data
+        history_df = history_df.dropna()
     return history_df
+
+# Function to filter history based on selected period
+def filter_history(history_df, period):
+    if history_df is None or history_df.empty:
+        return pd.DataFrame()
+
+    end_date = history_df.index.max()
+    start_date = None
+
+    if period == "1m":
+        start_date = end_date - pd.DateOffset(months=1)
+    elif period == "6m":
+        start_date = end_date - pd.DateOffset(months=6)
+    elif period == "1y":
+        start_date = end_date - pd.DateOffset(years=1)
+    elif period == "5y":
+        start_date = end_date - pd.DateOffset(years=5)
+    elif period == "Max":
+        # For 'Max', apply resampling if needed for display
+        return resample_history_if_needed(history_df.copy())
+    else: # Default to Max if period is unrecognized
+        return resample_history_if_needed(history_df.copy())
+
+    # Filter data >= start_date
+    filtered_df = history_df[history_df.index >= start_date]
+    return filtered_df
 
 # --- Streamlit App Layout ---
 
-st.set_page_config(layout="wide", page_title="StockEdex", page_icon="📈") # Added page icon
-st.title("📈 StockEdex - Top 50 S&P 500 Stocks") # Removed "by Market Cap" for brevity
+st.set_page_config(layout="wide", page_title="StockEdex", page_icon="📈")
+st.title("📈 StockEdex - Top 50 S&P 500 Stocks")
 
-# --- Data Loading ---
-sp500_tickers = get_sp500_tickers()
+# --- Data Loading with Spinners ---
+with st.spinner('Fetching S&P 500 tickers...'):
+    sp500_tickers = get_sp500_tickers()
 
 if not sp500_tickers:
-    st.stop() # Stop execution if we can't get tickers
-
-market_cap_df = get_market_caps(sp500_tickers)
-
-if market_cap_df.empty:
-    st.warning("Could not retrieve market cap data for S&P 500 stocks. Unable to determine top 50.")
+    st.error("Failed to load S&P 500 tickers. Please try refreshing.")
     st.stop()
 
-top_50_tickers = market_cap_df.head(50).index.tolist()
+with st.spinner('Fetching market cap data...'):
+    market_cap_df = get_market_caps(sp500_tickers)
+
+if market_cap_df.empty:
+    st.warning("Could not retrieve market cap data. Some features might be limited.")
+    # Don't stop entirely, maybe user wants to search other stocks later?
+    top_50_tickers = [] # Set to empty if no market cap data
+else:
+    top_50_tickers = market_cap_df.head(50).index.tolist()
 
 # --- Sidebar for Stock Selection ---
 st.sidebar.header("Select Stock(s) for Details or Comparison")
-# Use multiselect instead of selectbox
-selected_tickers = st.sidebar.multiselect( # Changed variable name
+selected_tickers = st.sidebar.multiselect(
     "Choose stocks from the Top 50 (by Market Cap):",
-    top_50_tickers,
-    default=top_50_tickers[0:1] # Default to the first stock initially
+    options=top_50_tickers, # Use options parameter
+    default=top_50_tickers[0:1] if top_50_tickers else [] # Handle empty case
 )
 
 # --- Main Area ---
 
 if not selected_tickers:
-    st.warning("👈 Please select at least one stock from the sidebar.") # Added emoji
+    st.warning("👈 Please select at least one stock from the sidebar.")
     st.stop()
+
+# --- Time Period Selection ---
+# Place this centrally, affecting both single and comparison views
+time_periods = ["1m", "6m", "1y", "5y", "Max"]
+selected_period = st.radio(
+    "Select Chart Time Period:",
+    options=time_periods,
+    index=len(time_periods) - 1, # Default to 'Max'
+    horizontal=True,
+    key='time_period_selector' # Add a key for potential state management
+)
+
+st.divider() # Separate selector from content
 
 # --- Display Single Stock Details ---
 if len(selected_tickers) == 1:
     selected_ticker = selected_tickers[0]
-    st.header(f"📊 Details for {selected_ticker}") # Added icon
-    info, history = get_stock_details(selected_ticker)
+    st.header(f"📊 Details for {selected_ticker}")
+
+    # Fetch data using spinner
+    with st.spinner(f'Fetching details for {selected_ticker}...'):
+        info, history_max = get_stock_details(selected_ticker)
 
     if info:
         # --- Company Overview Section ---
-        with st.container(border=True): # Use border for visual separation
-            st.subheader(":briefcase: Company Overview") # Added icon
+        with st.container(border=True):
+            st.subheader(":briefcase: Company Overview")
             col1, col2 = st.columns(2)
             with col1:
                 st.metric(label="**Company Name**", value=info.get('longName', 'N/A'))
@@ -198,10 +241,9 @@ if len(selected_tickers) == 1:
                 st.metric(label="**Industry**", value=info.get('industry', 'N/A'))
                 website = info.get('website', 'N/A')
                 if website and website != 'N/A':
-                     st.markdown(f"**Website:** [{website}]({website})") # Make website clickable
+                     st.markdown(f"**Website:** [{website}]({website})")
                 else:
                     st.metric(label="**Website**", value='N/A')
-
 
             with col2:
                 st.metric(label="**Market Cap**", value=f"${info.get('marketCap', 0):,}")
@@ -209,18 +251,18 @@ if len(selected_tickers) == 1:
                 st.metric(label="**Day High**", value=f"${info.get('dayHigh', 0):.2f}")
                 st.metric(label="**Day Low**", value=f"${info.get('dayLow', 0):.2f}")
 
-        st.divider() # Add visual separation
+        st.divider()
 
         # --- Business Summary Section ---
         with st.container(border=True):
-             st.subheader(":page_facing_up: Business Summary") # Added icon
+             st.subheader(":page_facing_up: Business Summary")
              st.write(info.get('longBusinessSummary', 'No summary available.'))
 
-        st.divider() # Add visual separation
+        st.divider()
 
         # --- Key Statistics & Valuation Section ---
         with st.container(border=True):
-            st.subheader(":calculator: Key Statistics & Valuation") # Added icon
+            st.subheader(":calculator: Key Statistics & Valuation")
             stats_col1, stats_col2, stats_col3 = st.columns(3)
 
             # Helper function to format metrics
@@ -242,7 +284,6 @@ if len(selected_tickers) == 1:
                      return f"{value*100:.2f}%"
                  return 'N/A'
 
-
             with stats_col1:
                 st.metric("P/E Ratio (TTM)", format_metric(info.get('trailingPE')))
                 st.metric("Forward P/E", format_metric(info.get('forwardPE')))
@@ -261,25 +302,32 @@ if len(selected_tickers) == 1:
                 st.metric("52 Week High", format_currency(info.get('fiftyTwoWeekHigh')))
                 st.metric("52 Week Low", format_currency(info.get('fiftyTwoWeekLow')))
 
-        st.divider() # Add visual separation
+        st.divider()
 
         # --- Chart Section ---
-        if history is not None and not history.empty:
+        history_filtered = filter_history(history_max, selected_period)
+        if history_filtered is not None and not history_filtered.empty:
              with st.container(border=True):
-                st.subheader(":chart_with_upwards_trend: Stock Price History (Max)") # Added icon
-                st.line_chart(history['Close'])
+                # Dynamic chart title
+                st.subheader(f":chart_with_upwards_trend: Stock Price History ({selected_period})")
+                st.line_chart(history_filtered['Close'])
         else:
-            st.warning("Could not retrieve price history.")
+             # Check if max history exists but filtering resulted in empty
+             if history_max is not None and not history_max.empty:
+                  st.warning(f"No data available for the selected '{selected_period}' period.")
+             else:
+                  st.warning("Could not retrieve price history.")
 
     else:
         st.error(f"Could not retrieve data for {selected_ticker}.")
 
 # --- Display Stock Comparison ---
 elif len(selected_tickers) > 1:
-    st.header(f"🆚 Comparison for: {', '.join(selected_tickers)}") # Added icon
+    st.header(f"🆚 Comparison for: {', '.join(selected_tickers)}")
 
     comparison_data = {}
-    history_data = {}
+    history_data_max = {} # Store max history first
+    # Define metrics earlier
     metrics_to_compare = [
         'longName', 'sector', 'industry', 'marketCap', 'currentPrice',
         'trailingPE', 'forwardPE', 'pegRatio', 'priceToSalesTrailing12Months',
@@ -297,42 +345,37 @@ elif len(selected_tickers) > 1:
     }
 
     has_data = False
-    for ticker in selected_tickers:
-        info, history = get_stock_details(ticker)
-        if info:
-            has_data = True
-            stock_metrics = {}
-            for metric in metrics_to_compare:
-                 stock_metrics[metric] = info.get(metric, 'N/A')
-            comparison_data[ticker] = stock_metrics
+    # Fetch all data with spinners
+    with st.spinner(f'Fetching details for {len(selected_tickers)} stocks...'):
+        for ticker in selected_tickers:
+            info, history = get_stock_details(ticker)
+            if info:
+                has_data = True
+                stock_metrics = {}
+                for metric in metrics_to_compare:
+                    stock_metrics[metric] = info.get(metric, 'N/A')
+                comparison_data[ticker] = stock_metrics
 
-            # Format specific metrics
-            comparison_data[ticker]['marketCap'] = info.get('marketCap', 0)
-            comparison_data[ticker]['enterpriseValue'] = info.get('enterpriseValue', 0)
-            comparison_data[ticker]['dividendYield'] = info.get('dividendYield', 0) * 100 # Store as percentage value
+                # Format specific metrics
+                comparison_data[ticker]['marketCap'] = info.get('marketCap', 0)
+                comparison_data[ticker]['enterpriseValue'] = info.get('enterpriseValue', 0)
+                comparison_data[ticker]['dividendYield'] = info.get('dividendYield', 0) * 100 # Store as percentage value
 
-        if history is not None and not history.empty:
-            # Resample individual history if needed before adding to comparison dict
-            resampled_hist = resample_history_if_needed(history)
-            if not resampled_hist.empty:
-                 history_data[ticker] = resampled_hist['Close']
+            if history is not None and not history.empty:
+                 history_data_max[ticker] = history['Close'] # Store only Close series
 
     if not has_data:
         st.error("Could not retrieve data for any of the selected stocks.")
         st.stop()
 
     # --- Comparison Table ---
-    with st.container(border=True): # Add border to comparison table container
-        st.subheader(":bar_chart: Key Metrics Comparison") # Added icon
-        # Create DataFrame and transpose for better readability (tickers as columns)
+    with st.container(border=True):
+        st.subheader(":bar_chart: Key Metrics Comparison")
         compare_df = pd.DataFrame.from_dict(comparison_data, orient='index')
-
-        # Select only the metrics we want to display and rename columns
-        compare_df = compare_df[metrics_to_compare] # Ensure order
+        compare_df = compare_df[metrics_to_compare]
         compare_df = compare_df.rename(columns=metrics_display_names)
-        compare_df = compare_df.transpose() # Metrics as rows, tickers as columns
+        compare_df = compare_df.transpose()
 
-        # Define formats first
         formats = {
             'Market Cap ($)': "{:,.0f}",
             'Current Price ($)': "{:,.2f}",
@@ -350,35 +393,69 @@ elif len(selected_tickers) > 1:
             '52 Week Low ($)': "{:,.2f}",
         }
 
-        # Ensure columns intended for numeric formatting/styling are numeric
-        # This helps prevent Arrow serialization errors with styled dataframes
         for metric_display_name in formats:
-            if metric_display_name in compare_df.index: # Check if the metric exists as an index (row name)
+            if metric_display_name in compare_df.index:
                 compare_df.loc[metric_display_name] = pd.to_numeric(compare_df.loc[metric_display_name], errors='coerce')
 
-
-        # Apply styling and formatting
         styled_df = compare_df.style.apply(highlight_max_min, axis=1).format(formats, na_rep="N/A")
+        st.dataframe(styled_df, use_container_width=True)
 
-        st.dataframe(styled_df, use_container_width=True) # Use container width
+    st.divider()
 
-    st.divider() # Add visual separation
+    # --- Filter and Prepare Comparison History Data ---
+    history_data_filtered = {}
+    all_empty = True
+    for ticker, hist_max in history_data_max.items():
+        filtered = filter_history(hist_max.to_frame('Close'), selected_period) # Convert Series to Frame for filter func
+        if not filtered.empty:
+             history_data_filtered[ticker] = filtered['Close'] # Store Series again
+             all_empty = False
+        else:
+            history_data_filtered[ticker] = pd.Series(dtype='float64') # Keep ticker key with empty series
 
-    # --- Comparison Chart ---
-    with st.container(border=True): # Add border to comparison chart container
-         st.subheader(":chart_with_upwards_trend: Price History Comparison (Max)") # Added icon and updated text
-         if history_data:
-             history_df = pd.DataFrame(history_data)
-             # Removed normalization step
-             # normalized_df = (history_df / history_df.iloc[0]) * 100
+    # --- Comparison Charts Container ---
+    with st.container(border=True):
+         st.subheader(f":chart_with_upwards_trend: Price History Comparison ({selected_period})")
+         if not all_empty:
+             history_df_filtered = pd.DataFrame(history_data_filtered)
+             history_df_filtered = history_df_filtered.dropna(axis=1, how='all') # Drop cols that are purely NaN
 
-             # Plot individual charts for each stock
-             for ticker in history_df.columns:
-                 st.subheader(f"{ticker} Price History")
-                 st.line_chart(history_df[ticker].dropna()) # Plot each stock's history, dropna for safety
+             # --- Normalized Performance Chart ---
+             st.subheader("Normalized Performance (% Change)")
+             # Align dataframes by index (dates) before normalizing
+             # Forward fill to handle missing values during normalization period
+             aligned_df = history_df_filtered.ffill().bfill()
+             # Find first valid index across all columns after alignment
+             first_valid_idx = aligned_df.first_valid_index()
+             if first_valid_idx is not None:
+                 # Get the row corresponding to the first valid index
+                 start_values = aligned_df.loc[first_valid_idx]
+                 # Avoid division by zero or NaN
+                 start_values = start_values.replace(0, pd.NA).ffill().bfill()
+
+                 if not start_values.isna().all():
+                     normalized_df = (aligned_df / start_values) * 100
+                     st.line_chart(normalized_df)
+                 else:
+                     st.warning("Could not determine start values for normalization.")
+             else:
+                 st.warning("No valid data points found for normalization in the selected period.")
+
+             st.divider()
+
+             # --- Individual Price Charts ---
+             st.subheader("Individual Price History")
+             for ticker in history_df_filtered.columns:
+                 # Check if the filtered series for this ticker has data
+                 if not history_df_filtered[ticker].dropna().empty:
+                     st.line_chart(history_df_filtered[ticker].dropna(), use_container_width=True)
+                     st.caption(f"{ticker} Price History") # Use caption for less emphasis
+                     st.markdown("----") # Separator between individual charts
+                 # else: # Optional: Show message if a specific ticker has no data for the period
+                     # st.caption(f"{ticker}: No data for selected period.")
 
          else:
-             st.warning("Could not retrieve sufficient price history for comparison charts.")
+             st.warning(f"Could not retrieve sufficient price history for comparison charts in the selected '{selected_period}' period.")
 
 
 # --- Footer Info ---
